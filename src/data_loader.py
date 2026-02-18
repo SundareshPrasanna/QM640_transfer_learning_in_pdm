@@ -5,7 +5,7 @@ Provides DataLoader classes for training, validation, and transfer learning expe
 """
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader, Subset, WeightedRandomSampler
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from typing import Tuple, Dict, Optional, List
 from sklearn.model_selection import train_test_split
 
@@ -48,9 +48,9 @@ class CMAPSSDataset(Dataset):
     
     def get_class_weights(self) -> torch.Tensor:
         """Compute class weights for handling imbalance."""
-        class_counts = torch.bincount(self.y)
+        class_counts = torch.bincount(self.y, minlength=2).float().clamp_min(1.0)
         total = len(self.y)
-        weights = total / (len(class_counts) * class_counts.float())
+        weights = total / (2 * class_counts)
         return weights
     
     def get_sample_weights(self) -> torch.Tensor:
@@ -58,6 +58,45 @@ class CMAPSSDataset(Dataset):
         class_weights = self.get_class_weights()
         sample_weights = class_weights[self.y]
         return sample_weights
+
+
+def split_by_engine(
+    X: np.ndarray,
+    y: np.ndarray,
+    unit_ids: np.ndarray,
+    val_split: float = 0.2,
+    random_state: int = RANDOM_SEED,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Split data at engine level to avoid leakage across overlapping windows.
+    """
+    unique_units = np.unique(unit_ids)
+
+    # If too few engines are available (e.g., extreme label-efficiency subsets),
+    # fall back to a window-level split to keep the experiment runnable.
+    if len(unique_units) < 2:
+        indices = np.arange(len(y))
+        stratify_labels = y if len(np.unique(y)) > 1 else None
+        train_idx, val_idx = train_test_split(
+            indices,
+            test_size=val_split,
+            random_state=random_state,
+            shuffle=True,
+            stratify=stratify_labels,
+        )
+        return X[train_idx], X[val_idx], y[train_idx], y[val_idx]
+
+    train_units, val_units = train_test_split(
+        unique_units,
+        test_size=val_split,
+        random_state=random_state,
+        shuffle=True,
+    )
+
+    train_mask = np.isin(unit_ids, train_units)
+    val_mask = np.isin(unit_ids, val_units)
+
+    return X[train_mask], X[val_mask], y[train_mask], y[val_mask]
 
 
 def get_data_loaders(
@@ -85,16 +124,28 @@ def get_data_loaders(
     
     X_train = data['X_train']
     y_train = data['y_train']
+    units_train = data.get('units_train')
     X_test = data['X_test']
     y_test = data['y_test']
     
-    # Split training data into train and validation
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_train, y_train,
-        test_size=val_split,
-        stratify=y_train,
-        random_state=RANDOM_SEED
-    )
+    # Split training data into train and validation at engine level
+    if units_train is not None:
+        X_train, X_val, y_train, y_val = split_by_engine(
+            X_train,
+            y_train,
+            units_train,
+            val_split=val_split,
+            random_state=RANDOM_SEED,
+        )
+    else:
+        # Backward-compatible fallback if unit IDs are unavailable
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_train,
+            y_train,
+            test_size=val_split,
+            stratify=y_train,
+            random_state=RANDOM_SEED,
+        )
     
     # Create datasets
     train_dataset = CMAPSSDataset(X_train, y_train)
@@ -176,23 +227,37 @@ def get_transfer_data_loaders(
     
     X_target = target_data['X_train']
     y_target = target_data['y_train']
+    units_target = target_data.get('units_train')
     
-    # Sample subset if fraction < 1.0
-    if target_label_fraction < 1.0:
-        n_samples = int(len(y_target) * target_label_fraction)
-        indices = np.random.RandomState(RANDOM_SEED).choice(
-            len(y_target), size=n_samples, replace=False
+    # Sample subset if fraction < 1.0 (engine-level sampling to avoid leakage)
+    if target_label_fraction < 1.0 and units_target is not None:
+        unique_units = np.unique(units_target)
+        n_units = max(1, int(np.ceil(len(unique_units) * target_label_fraction)))
+        selected_units = np.random.RandomState(RANDOM_SEED).choice(
+            unique_units, size=n_units, replace=False
         )
-        X_target = X_target[indices]
-        y_target = y_target[indices]
+        subset_mask = np.isin(units_target, selected_units)
+        X_target = X_target[subset_mask]
+        y_target = y_target[subset_mask]
+        units_target = units_target[subset_mask]
     
     # Split into train/val
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_target, y_target,
-        test_size=0.2,
-        stratify=y_target,
-        random_state=RANDOM_SEED
-    )
+    if units_target is not None:
+        X_train, X_val, y_train, y_val = split_by_engine(
+            X_target,
+            y_target,
+            units_target,
+            val_split=0.2,
+            random_state=RANDOM_SEED,
+        )
+    else:
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_target,
+            y_target,
+            test_size=0.2,
+            stratify=y_target,
+            random_state=RANDOM_SEED,
+        )
     
     target_train_dataset = CMAPSSDataset(X_train, y_train)
     target_val_dataset = CMAPSSDataset(X_val, y_val)
@@ -244,9 +309,10 @@ def get_class_weights_tensor(dataset_name: str) -> torch.Tensor:
     data = load_processed_data(dataset_name)
     y = data['y_train']
     
-    class_counts = np.bincount(y)
+    class_counts = np.bincount(y, minlength=2).astype(float)
+    class_counts = np.clip(class_counts, 1.0, None)
     total = len(y)
-    weights = total / (len(class_counts) * class_counts.astype(float))
+    weights = total / (2 * class_counts)
     
     return torch.tensor(weights, dtype=torch.float32).to(DEVICE)
 

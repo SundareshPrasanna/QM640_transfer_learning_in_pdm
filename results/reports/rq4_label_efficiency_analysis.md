@@ -1,6 +1,6 @@
 # RQ4: Label Efficiency Analysis Report
 
-*Generated: 2026-01-16 20:39:29*
+*Generated: 2026-02-18 12:34:12*
 
 ## Research Question
 
@@ -10,11 +10,11 @@
 
 | Label Fraction | Accuracy | F1-Score | ROC-AUC |
 |----------------|----------|----------|----------|
-| 1.0% | 0.9235 | 0.2338 | 0.9809 |
-| 5.0% | 0.9312 | 0.2487 | 0.9804 |
-| 10.0% | 0.9813 | 0.4195 | 0.9718 |
-| 20.0% | 0.9873 | 0.5505 | 0.9747 |
-| 50.0% | 0.9920 | 0.6435 | 0.9844 |
+| 1.0% | 0.9897 | 0.2553 | 0.9779 |
+| 5.0% | 0.9892 | 0.6309 | 0.9879 |
+| 10.0% | 0.9917 | 0.5304 | 0.9786 |
+| 20.0% | 0.9788 | 0.4857 | 0.9878 |
+| 50.0% | 0.9843 | 0.5556 | 0.9883 |
 
 ## Statistical Analysis (H04 vs H14)
 
@@ -22,10 +22,10 @@
 
 **H14:** Significant improvement is possible even with <10% data.
 
-**Baseline (0% Target Labels):** F1 = 0.0988
+**Baseline (0% Target Labels):** F1 = 0.1858
 
-- **1% Data Improvement:** +0.1350
-- **5% Data Improvement:** +0.1499
-- **10% Data Improvement:** +0.3207
+- **1% Data Improvement:** +0.0695
+- **5% Data Improvement:** +0.4451
+- **10% Data Improvement:** +0.3446
 
 **Conclusion:** We REJECT H04. Substantial performance gains (e.g., >50% improvement) are achievable with as little as 5% of target domain labeled data.

@@ -11,9 +11,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from typing import Dict, List, Tuple, Optional
-from sklearn.model_selection import train_test_split
 import copy
 
 from src.config import (
@@ -21,7 +20,7 @@ from src.config import (
     SOURCE_DOMAIN, TARGET_DOMAINS, RANDOM_SEED
 )
 from src.preprocessing import load_processed_data
-from src.data_loader import CMAPSSDataset, get_class_weights_tensor
+from src.data_loader import CMAPSSDataset, split_by_engine
 from src.models.cnn import CNNModel, CNN1D
 from src.models.lstm import LSTMModel, BiLSTM
 from src.training import train_model, evaluate_model, set_seed, EarlyStopping
@@ -101,6 +100,37 @@ def freeze_base_layers(model: nn.Module, model_type: str) -> None:
     print(f"Frozen base layers: {total - trainable:,} params frozen, {trainable:,} trainable")
 
 
+def compute_class_weights_from_loader(train_loader: DataLoader) -> torch.Tensor:
+    """Compute binary class weights from target train loader labels."""
+    all_labels = []
+    for _, y_batch in train_loader:
+        all_labels.extend(y_batch.numpy())
+
+    all_labels = np.asarray(all_labels, dtype=np.int64)
+    class_counts = np.bincount(all_labels, minlength=2).astype(float)
+    class_counts = np.clip(class_counts, 1.0, None)
+    total = len(all_labels)
+    weights = total / (2.0 * class_counts)
+    return torch.tensor(weights, dtype=torch.float32, device=DEVICE)
+
+
+def weighted_bce_loss(
+    outputs: torch.Tensor,
+    targets: torch.Tensor,
+    class_weights: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Binary cross entropy with optional class weights for class 0/1."""
+    eps = 1e-7
+    outputs = torch.clamp(outputs, eps, 1 - eps)
+
+    if class_weights is None:
+        return nn.functional.binary_cross_entropy(outputs, targets)
+
+    w0, w1 = class_weights[0], class_weights[1]
+    loss = -(w1 * targets * torch.log(outputs) + w0 * (1 - targets) * torch.log(1 - outputs))
+    return loss.mean()
+
+
 def fine_tune_model(
     model: nn.Module,
     train_loader: DataLoader,
@@ -133,8 +163,7 @@ def fine_tune_model(
     if freeze_base:
         freeze_base_layers(model, model_type)
     
-    # Loss and optimizer
-    criterion = nn.BCELoss()
+    class_weights = compute_class_weights_from_loader(train_loader)
     
     # Only optimize trainable parameters
     trainable_params = [p for p in model.parameters() if p.requires_grad]
@@ -168,7 +197,7 @@ def fine_tune_model(
             
             optimizer.zero_grad()
             outputs = model(X_batch)
-            loss = criterion(outputs, y_batch)
+            loss = weighted_bce_loss(outputs, y_batch, class_weights)
             loss.backward()
             optimizer.step()
             
@@ -189,7 +218,7 @@ def fine_tune_model(
                 y_batch = y_batch.float().to(DEVICE)
                 
                 outputs = model(X_batch)
-                loss = criterion(outputs, y_batch)
+                loss = weighted_bce_loss(outputs, y_batch, class_weights)
                 val_loss += loss.item() * X_batch.size(0)
                 
                 val_preds.extend((outputs > 0.5).cpu().numpy())
@@ -250,6 +279,7 @@ def prepare_target_data(
     # Align features
     X_train = target_data['X_train']
     y_train = target_data['y_train']
+    units_train = target_data.get('units_train')
     X_test = target_data['X_test']
     y_test = target_data['y_test']
     
@@ -258,22 +288,37 @@ def prepare_target_data(
         X_test = align_features_for_transfer(X_test, target_features, source_features)
         print(f"  Aligned features: {len(target_features)} -> {len(source_features)}")
     
-    # Sample subset if label_fraction < 1.0
-    if label_fraction < 1.0:
-        n_samples = int(len(y_train) * label_fraction)
+    # Sample subset if label_fraction < 1.0 at engine level
+    if label_fraction < 1.0 and units_train is not None:
+        unique_units = np.unique(units_train)
+        n_units = max(1, int(np.ceil(len(unique_units) * label_fraction)))
         np.random.seed(RANDOM_SEED)
-        indices = np.random.choice(len(y_train), size=n_samples, replace=False)
-        X_train = X_train[indices]
-        y_train = y_train[indices]
-        print(f"  Using {label_fraction*100:.0f}% of labels: {n_samples} samples")
+        selected_units = np.random.choice(unique_units, size=n_units, replace=False)
+        subset_mask = np.isin(units_train, selected_units)
+        X_train = X_train[subset_mask]
+        y_train = y_train[subset_mask]
+        units_train = units_train[subset_mask]
+        print(f"  Using {label_fraction*100:.0f}% of labels: {n_units}/{len(unique_units)} engines")
     
-    # Split into train/val
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_train, y_train,
-        test_size=val_split,
-        stratify=y_train,
-        random_state=RANDOM_SEED
-    )
+    # Split into train/val at engine level to avoid window leakage
+    if units_train is not None:
+        X_train, X_val, y_train, y_val = split_by_engine(
+            X_train,
+            y_train,
+            units_train,
+            val_split=val_split,
+            random_state=RANDOM_SEED,
+        )
+    else:
+        # Fallback (backward compatibility for legacy processed files)
+        from sklearn.model_selection import train_test_split
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_train,
+            y_train,
+            test_size=val_split,
+            stratify=y_train,
+            random_state=RANDOM_SEED,
+        )
     
     # Create datasets
     train_dataset = CMAPSSDataset(X_train, y_train)
@@ -281,7 +326,13 @@ def prepare_target_data(
     test_dataset = CMAPSSDataset(X_test, y_test)
     
     # Create loaders
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+    sample_weights = train_dataset.get_sample_weights()
+    sampler = WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(sample_weights),
+        replacement=True,
+    )
+    train_loader = DataLoader(train_dataset, batch_size=64, sampler=sampler)
     val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
     

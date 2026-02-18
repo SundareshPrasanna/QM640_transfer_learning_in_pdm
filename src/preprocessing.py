@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Tuple, Dict, Optional, List
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
 import pickle
 
 from src.config import (
@@ -25,6 +25,8 @@ from src.config import (
     WINDOW_SIZE,
     SENSORS_TO_USE,
     OP_SETTINGS,
+    SOURCE_DOMAIN,
+    TARGET_DOMAINS,
 )
 
 
@@ -163,26 +165,33 @@ def identify_constant_sensors(df: pd.DataFrame, std_threshold: float = 0.001) ->
 def normalize_data(
     train_df: pd.DataFrame, 
     test_df: pd.DataFrame,
-    feature_cols: List[str]
-) -> Tuple[pd.DataFrame, pd.DataFrame, StandardScaler]:
+    feature_cols: List[str],
+    scaler: Optional[MinMaxScaler] = None,
+    fit_scaler: bool = True,
+) -> Tuple[pd.DataFrame, pd.DataFrame, MinMaxScaler]:
     """
-    Normalize features using StandardScaler fitted on training data.
-    
+    Normalize features using MinMax scaling.
+
     Args:
         train_df: Training DataFrame
         test_df: Test DataFrame
         feature_cols: List of columns to normalize
-    
+        scaler: Optional pre-fitted scaler (used for transfer setup)
+        fit_scaler: Whether to fit scaler on train_df before transform
+
     Returns:
         Tuple of (normalized_train_df, normalized_test_df, scaler)
     """
-    scaler = StandardScaler()
+    if scaler is None:
+        scaler = MinMaxScaler()
+        fit_scaler = True
     
     train_df = train_df.copy()
     test_df = test_df.copy()
     
-    # Fit on training data
-    scaler.fit(train_df[feature_cols])
+    # Fit only when requested (for source-domain fit in transfer setup)
+    if fit_scaler:
+        scaler.fit(train_df[feature_cols])
     
     # Transform both
     train_df[feature_cols] = scaler.transform(train_df[feature_cols])
@@ -246,7 +255,11 @@ def create_sliding_windows(
 
 def preprocess_dataset(
     dataset_name: str,
-    save: bool = True
+    save: bool = True,
+    scaler: Optional[MinMaxScaler] = None,
+    feature_cols: Optional[List[str]] = None,
+    fit_scaler: bool = True,
+    drop_constant_sensors: bool = False,
 ) -> Dict:
     """
     Full preprocessing pipeline for a C-MAPSS dataset.
@@ -254,6 +267,10 @@ def preprocess_dataset(
     Args:
         dataset_name: One of 'FD001', 'FD002', 'FD003', 'FD004'
         save: Whether to save processed data to disk
+        scaler: Optional scaler to apply (for source-fitted transfer setup)
+        feature_cols: Optional fixed feature columns (enforces aligned feature space)
+        fit_scaler: Whether scaler should be fitted on this dataset's train split
+        drop_constant_sensors: If True, remove near-constant sensors per dataset
     
     Returns:
         Dictionary with processed data
@@ -275,16 +292,29 @@ def preprocess_dataset(
     print("Test data:")
     test_df = create_fault_labels(test_df)
     
-    # Identify constant sensors from training data
-    constant_sensors = identify_constant_sensors(train_df)
-    print(f"\nDropping constant sensors: {constant_sensors}")
-    
-    # Define feature columns (all sensors except constant ones)
-    feature_cols = [s for s in SENSORS_TO_USE if s not in constant_sensors]
+    # Define feature columns
+    constant_sensors: List[str] = []
+    if feature_cols is None:
+        if drop_constant_sensors:
+            constant_sensors = identify_constant_sensors(train_df)
+            print(f"\nDropping constant sensors: {constant_sensors}")
+            feature_cols = [s for s in SENSORS_TO_USE if s not in constant_sensors]
+        else:
+            feature_cols = list(SENSORS_TO_USE)
+    else:
+        feature_cols = list(feature_cols)
+        if drop_constant_sensors:
+            constant_sensors = identify_constant_sensors(train_df)
     print(f"Using {len(feature_cols)} sensors: {feature_cols}")
     
     # Normalize
-    train_df, test_df, scaler = normalize_data(train_df, test_df, feature_cols)
+    train_df, test_df, scaler = normalize_data(
+        train_df,
+        test_df,
+        feature_cols,
+        scaler=scaler,
+        fit_scaler=fit_scaler,
+    )
     
     # Create sliding windows
     print(f"\nCreating sliding windows (size={WINDOW_SIZE})...")
@@ -308,6 +338,7 @@ def preprocess_dataset(
         'y_test': y_test,
         'units_test': units_test,
         'feature_cols': feature_cols,
+        'constant_sensors': constant_sensors,
         'scaler': scaler,
         'train_df': train_df,
         'test_df': test_df,
@@ -343,9 +374,36 @@ def load_processed_data(dataset_name: str) -> Dict:
 
 
 def preprocess_all_datasets() -> None:
-    """Preprocess all C-MAPSS datasets."""
-    for dataset_name in DATASETS.keys():
-        preprocess_dataset(dataset_name)
+    """
+    Preprocess all C-MAPSS datasets with transfer-learning-safe normalization.
+
+    Source domain scaler is fit on FD002 training data and then reused for all
+    target domains to avoid target-domain leakage.
+    """
+    # Fixed feature space for all domains (keeps transfer inputs aligned)
+    source_feature_cols = list(SENSORS_TO_USE)
+
+    # Process source first and fit scaler there
+    print("\nFitting normalization on source domain only...")
+    source_result = preprocess_dataset(
+        SOURCE_DOMAIN,
+        save=True,
+        feature_cols=source_feature_cols,
+        fit_scaler=True,
+        drop_constant_sensors=False,
+    )
+    source_scaler = source_result['scaler']
+
+    # Process targets using the pre-fitted source scaler
+    for dataset_name in TARGET_DOMAINS:
+        preprocess_dataset(
+            dataset_name,
+            save=True,
+            scaler=source_scaler,
+            feature_cols=source_feature_cols,
+            fit_scaler=False,
+            drop_constant_sensors=False,
+        )
     
     print("\n" + "="*60)
     print("All datasets processed successfully!")

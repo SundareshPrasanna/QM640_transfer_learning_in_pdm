@@ -107,7 +107,7 @@ FINE_TUNING_PARAMS = {
 }
 
 # Label efficiency experiments
-LABEL_PERCENTAGES = [0.01, 0.05, 0.10, 0.20]  # 1%, 5%, 10%, 20%
+LABEL_PERCENTAGES = [0.01, 0.05, 0.10, 0.20, 0.50]  # 1%, 5%, 10%, 20%, 50%
 
 # ============================================================================
 # EVALUATION
