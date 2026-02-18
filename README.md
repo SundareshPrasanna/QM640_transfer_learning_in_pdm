@@ -75,7 +75,7 @@ This executes:
 - `python scripts/run_label_efficiency.py` (RQ4)
 - `python scripts/run_lstm_gradual_unfreezing.py` (RQ5)
 
-## 6. Key Output Artifacts (Latest Runs)
+## 6. Key Output Artifacts
 Main outputs are under `results/reports/`:
 
 - `rq1_results.csv`, `rq1_domain_shift_analysis.md`, `rq1_degradation.png`
