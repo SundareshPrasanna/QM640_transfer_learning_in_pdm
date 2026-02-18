@@ -41,12 +41,21 @@ def get_target_class_weights(train_loader: DataLoader) -> torch.Tensor:
     
     # Avoid division by zero
     if n_faults == 0:
-        return torch.tensor([1.0], device=DEVICE)
+        return torch.tensor([1.0, 1.0], device=DEVICE, dtype=torch.float32)
         
     weight_for_fault = n_healthy / n_faults
     # Cap weight or use square root to prevent over-optimization for faults
     weight_for_fault = np.sqrt(weight_for_fault) 
-    return torch.tensor([weight_for_fault], device=DEVICE, dtype=torch.float32)
+    return torch.tensor([1.0, weight_for_fault], device=DEVICE, dtype=torch.float32)
+
+
+def weighted_bce_loss(outputs: torch.Tensor, targets: torch.Tensor, class_weights: torch.Tensor) -> torch.Tensor:
+    """Binary cross-entropy with target-domain class weights."""
+    eps = 1e-7
+    outputs = torch.clamp(outputs, eps, 1 - eps)
+    w0, w1 = class_weights[0], class_weights[1]
+    loss = -(w1 * targets * torch.log(outputs) + w0 * (1 - targets) * torch.log(1 - outputs))
+    return loss.mean()
 
 def prepare_model_for_adaptive_bn(model: nn.Module, model_type: str):
     """
@@ -110,14 +119,17 @@ def advanced_fine_tune(
     """
     set_seed()
     
-    # 1. Calculate Dynamic Weights
-    criterion = nn.BCELoss(reduction='mean')
+    # 1. Calculate dynamic class weights from target domain
+    class_weights = get_target_class_weights(train_loader)
     
     # --- STAGE 1: Head Warmup (Frozen Base) ---
     if verbose:
         print(f"\n>>> STAGE 1: Head Warmup (LR={lr_stage1})")
     
-    freeze_base_layers(model, model_type)
+    if model_type == 'cnn':
+        prepare_model_for_adaptive_bn(model, model_type)
+    else:
+        freeze_base_layers(model, model_type)
     optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad], lr=lr_stage1)
     
     best_val_loss = float('inf')
@@ -129,7 +141,7 @@ def advanced_fine_tune(
             X, y = X.to(DEVICE), y.to(DEVICE).float()
             optimizer.zero_grad()
             out = model(X)
-            loss = criterion(out, y)
+            loss = weighted_bce_loss(out, y, class_weights)
             loss.backward()
             optimizer.step()
 
@@ -172,8 +184,7 @@ def advanced_fine_tune(
             X, y = X.to(DEVICE), y.to(DEVICE).float()
             optimizer.zero_grad()
             out = model(X)
-            # Use dynamic weight only in this refinement stage
-            loss = criterion(out, y)
+            loss = weighted_bce_loss(out, y, class_weights)
             loss.backward()
             optimizer.step()
         
@@ -184,7 +195,7 @@ def advanced_fine_tune(
             for X, y in val_loader:
                 X, y = X.to(DEVICE), y.to(DEVICE).float()
                 out = model(X)
-                val_loss += criterion(out, y).item()
+                val_loss += weighted_bce_loss(out, y, class_weights).item()
         
         avg_val_loss = val_loss / len(val_loader)
         if verbose and (epoch+1)%5 == 0:
@@ -204,8 +215,9 @@ def advanced_fine_tune(
 
 def run_advanced_experiment(model_type: str, target_domain: str, label_fraction: float = 0.2):
     """Run the advanced transfer experiment for a specific target domain."""
+    run_label = "LSTM GRADUAL UNFREEZING TRANSFER" if model_type == 'lstm' else "ADVANCED TRANSFER"
     print(f"\n{'*'*60}")
-    print(f"ADVANCED TRANSFER: {model_type.upper()} on {target_domain} ({label_fraction*100:.0f}% labels)")
+    print(f"{run_label}: {model_type.upper()} on {target_domain} ({label_fraction*100:.0f}% labels)")
     print(f"{'*'*60}")
     
     # 1. Load Pretrained

@@ -19,6 +19,21 @@ from src.config import (
 )
 from src.transfer_learning import run_fine_tuning_experiment
 
+
+def get_rq1_baseline(model: str = 'cnn', target_domain: str = 'FD001') -> float:
+    """Load direct-transfer baseline from RQ1 results."""
+    rq1_path = REPORTS_DIR / "rq1_results.csv"
+    if not rq1_path.exists():
+        raise FileNotFoundError(
+            f"Missing {rq1_path}. Run RQ1 before RQ4 so baseline is data-driven."
+        )
+
+    rq1_df = pd.read_csv(rq1_path)
+    row = rq1_df[(rq1_df['model'] == model) & (rq1_df['domain'] == target_domain)]
+    if row.empty:
+        raise ValueError(f"No RQ1 baseline found for model={model}, domain={target_domain}")
+    return float(row['f1_score'].iloc[0])
+
 def run_label_efficiency_experiments():
     """Run experiments with different label fractions on target domains."""
     print("="*60)
@@ -84,9 +99,8 @@ def generate_report(results_df):
         f.write("**H04:** Small amounts of target data (<10%) do not provide significant performance improvements.\n\n")
         f.write("**H14:** Significant improvement is possible even with <10% data.\n\n")
         
-        # Compare 1% and 5% vs 0% (from RQ1)
-        # We know from RQ1 that CNN on FD001 (Direct Transfer) had F1 ≈ 0.0988
-        base_f1 = 0.0988
+        # Compare 1%/5%/10% vs 0% direct-transfer baseline from RQ1
+        base_f1 = get_rq1_baseline(model='cnn', target_domain='FD001')
         
         f.write(f"**Baseline (0% Target Labels):** F1 = {base_f1:.4f}\n\n")
         

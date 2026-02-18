@@ -20,7 +20,7 @@ class RandomForestModel:
     """
     Random Forest model wrapper for fault detection.
     
-    Flattens (window_size, n_features) windows into 1D feature vectors.
+    Converts each (window_size, n_features) window into statistical features.
     """
     
     def __init__(self, params: Optional[Dict[str, Any]] = None):
@@ -38,18 +38,36 @@ class RandomForestModel:
         self.is_fitted = False
         self.n_features_in_ = None
         
-    def _flatten_windows(self, X: np.ndarray) -> np.ndarray:
+    def _extract_window_features(self, X: np.ndarray) -> np.ndarray:
         """
-        Flatten 3D window data to 2D for RF.
-        
+        Extract statistical features from 3D window data for RF.
+
         Args:
             X: Array of shape (n_samples, window_size, n_features)
-        
+
         Returns:
-            Array of shape (n_samples, window_size * n_features)
+            Array of shape (n_samples, n_features * n_stats)
         """
-        n_samples = X.shape[0]
-        return X.reshape(n_samples, -1)
+        # Basic summary stats per sensor
+        mean = X.mean(axis=1)
+        std = X.std(axis=1)
+        min_v = X.min(axis=1)
+        max_v = X.max(axis=1)
+        p25 = np.percentile(X, 25, axis=1)
+        p50 = np.percentile(X, 50, axis=1)
+        p75 = np.percentile(X, 75, axis=1)
+
+        # Linear trend (slope) per sensor across window time
+        t = np.arange(X.shape[1], dtype=np.float32)
+        t_centered = t - t.mean()
+        denom = np.sum(t_centered ** 2)
+        centered = X - X.mean(axis=1, keepdims=True)
+        slope = np.sum(centered * t_centered[None, :, None], axis=1) / denom
+
+        return np.concatenate(
+            [mean, std, min_v, max_v, p25, p50, p75, slope],
+            axis=1,
+        )
     
     def fit(self, X: np.ndarray, y: np.ndarray) -> "RandomForestModel":
         """
@@ -62,7 +80,7 @@ class RandomForestModel:
         Returns:
             self
         """
-        X_flat = self._flatten_windows(X)
+        X_flat = self._extract_window_features(X)
         self.n_features_in_ = X_flat.shape[1]
         
         print(f"Training Random Forest on {X_flat.shape[0]} samples, {X_flat.shape[1]} features...")
@@ -85,7 +103,7 @@ class RandomForestModel:
         if not self.is_fitted:
             raise ValueError("Model not fitted. Call fit() first.")
         
-        X_flat = self._flatten_windows(X)
+        X_flat = self._extract_window_features(X)
         return self.model.predict(X_flat)
     
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
@@ -101,7 +119,7 @@ class RandomForestModel:
         if not self.is_fitted:
             raise ValueError("Model not fitted. Call fit() first.")
         
-        X_flat = self._flatten_windows(X)
+        X_flat = self._extract_window_features(X)
         return self.model.predict_proba(X_flat)
     
     def evaluate(self, X: np.ndarray, y: np.ndarray) -> Dict[str, float]:

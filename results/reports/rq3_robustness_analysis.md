@@ -1,6 +1,6 @@
 # RQ3: Model Architecture Robustness Comparison
 
-*Generated: 2026-01-16 20:38:23*
+*Generated: 2026-02-18 12:33:00*
 
 ## Research Question
 
@@ -10,18 +10,17 @@
 
 | Domain | CNN F1 | LSTM F1 | Difference (C-L) |
 |--------|--------|---------|------------------|
-| FD001 | 0.0988 | 0.0939 | +0.0050 |
-| FD002 | 0.5534 | 0.5580 | -0.0046 |
-| FD003 | 0.0178 | 0.0141 | +0.0037 |
-| FD004 | 0.3657 | 0.4828 | -0.1171 |
+| FD001 | 0.1858 | 0.3034 | -0.1176 |
+| FD003 | 0.0704 | 0.0000 | +0.0704 |
+| FD004 | 0.4129 | 0.5916 | -0.1787 |
 
 ## Fine-Tuned Robustness (20% Labels)
 
 | Target Domain | CNN F1 | LSTM F1 | Difference (C-L) |
 |---------------|--------|---------|------------------|
-| FD001 | 0.5505 | 0.0451 | +0.5054 |
-| FD003 | 0.4975 | 0.0965 | +0.4010 |
-| FD004 | 0.3927 | 0.5000 | -0.1073 |
+| FD001 | 0.4857 | 0.7256 | -0.2399 |
+| FD003 | 0.0604 | 0.1085 | -0.0481 |
+| FD004 | 0.1231 | 0.5006 | -0.3774 |
 
 ## Statistical Analysis (H03 vs H13)
 
@@ -31,7 +30,7 @@
 
 ### Results Summary
 
-- **Mean F1 (Direct Transfer):** CNN = 0.2589, LSTM = 0.2872
-- **Mean F1 (Fine-Tuned):** CNN = 0.4802, LSTM = 0.2139
+- **Mean F1 (Direct Transfer):** CNN = 0.2231, LSTM = 0.2983
+- **Mean F1 (Fine-Tuned):** CNN = 0.2231, LSTM = 0.4449
 
-The **CNN architecture** appears more robust to domain shift in this study, especially when considering the effectiveness of transfer learning/fine-tuning. CNN showed significantly better adaptation to FD001 and FD003 compared to LSTM.
+The **LSTM architecture** appears more robust to domain shift in this study, demonstrating better stability or mean performance across domains.

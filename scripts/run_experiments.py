@@ -17,6 +17,7 @@ EXPERIMENTS = {
     'rq2': 'scripts/run_fine_tuning.py',
     'rq3': 'scripts/run_robustness.py',
     'rq4': 'scripts/run_label_efficiency.py',
+    'lstm_gradual_unfreezing': 'scripts/run_lstm_gradual_unfreezing.py',
 }
 
 def run_script(script_path):
@@ -43,11 +44,20 @@ def run_script(script_path):
 def main():
     parser = argparse.ArgumentParser(description="Run QM640 Capstone Experiments")
     
-    parser.add_argument('--all', action='store_true', help='Run all experiments (RQ1-RQ4)')
+    parser.add_argument(
+        '--all',
+        action='store_true',
+        help='Run all experiments (RQ1-RQ4 + LSTM gradual unfreezing analysis)'
+    )
     parser.add_argument('--rq1', action='store_true', help='Run RQ1: Domain Shift Analysis')
     parser.add_argument('--rq2', action='store_true', help='Run RQ2: Fine-Tuning Analysis')
     parser.add_argument('--rq3', action='store_true', help='Run RQ3: Robustness Analysis')
     parser.add_argument('--rq4', action='store_true', help='Run RQ4: Label Efficiency Analysis')
+    parser.add_argument(
+        '--lstm-gradual-unfreezing',
+        action='store_true',
+        help='Run LSTM-only gradual unfreezing transfer analysis'
+    )
     parser.add_argument('--data', action='store_true', help='Download and preprocess data only')
     
     args = parser.parse_args()
@@ -69,12 +79,15 @@ def main():
     scripts_to_run = []
     
     if args.all:
-        scripts_to_run = [EXPERIMENTS[key] for key in sorted(EXPERIMENTS.keys())]
+        run_order = ['rq1', 'rq2', 'rq3', 'rq4', 'lstm_gradual_unfreezing']
+        scripts_to_run = [EXPERIMENTS[key] for key in run_order]
     else:
         if args.rq1: scripts_to_run.append(EXPERIMENTS['rq1'])
         if args.rq2: scripts_to_run.append(EXPERIMENTS['rq2'])
         if args.rq3: scripts_to_run.append(EXPERIMENTS['rq3'])
         if args.rq4: scripts_to_run.append(EXPERIMENTS['rq4'])
+        if args.lstm_gradual_unfreezing:
+            scripts_to_run.append(EXPERIMENTS['lstm_gradual_unfreezing'])
     
     # Execute
     success_count = 0

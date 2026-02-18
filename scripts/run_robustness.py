@@ -40,13 +40,14 @@ def analyze_robustness(rq1_df, rq2_df):
     rq1_nn = rq1_df[rq1_df['model'].isin(['cnn', 'lstm'])].copy()
     
     # Aggregate data for comparison
-    # Metric 1: Mean F1 across all domains (including source)
+    # Metric 1: Mean/variance F1 across TARGET domains only
     print("\n" + "="*60)
     print("ROBUSTNESS ANALYSIS (RQ3)")
     print("="*60)
     
     # Pivot RQ1 results to compare CNN vs LSTM across domains
-    comparison_df = rq1_nn.pivot(index='domain', columns='model', values='f1_score')
+    target_only = rq1_nn[rq1_nn['domain_type'] == 'target'].copy()
+    comparison_df = target_only.pivot(index='domain', columns='model', values='f1_score')
     
     # Calculate difference
     comparison_df['diff'] = comparison_df['cnn'] - comparison_df['lstm']
@@ -78,8 +79,8 @@ def analyze_robustness(rq1_df, rq2_df):
     # Robustness Metric: Variance (Lower is more robust)
     robustness_metrics = []
     for model in ['cnn', 'lstm']:
-        # Direct transfer variance
-        dt_scores = rq1_nn[rq1_nn['model'] == model]['f1_score']
+        # Direct transfer robustness on target domains only
+        dt_scores = target_only[target_only['model'] == model]['f1_score']
         dt_var = dt_scores.var()
         dt_mean = dt_scores.mean()
         

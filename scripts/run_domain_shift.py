@@ -178,21 +178,35 @@ def statistical_hypothesis_test(results_df):
         mean_target_f1 = np.mean(target_f1s)
         degradation = source_f1 - mean_target_f1
         
-        # One-sample t-test: Is target F1 significantly lower than source F1?
-        t_stat, p_value = stats.ttest_1samp(target_f1s, source_f1)
+        # One-sided Wilcoxon signed-rank on paired differences (source - target > 0)
+        diffs = source_f1 - target_f1s
+        if np.allclose(diffs, 0):
+            w_stat = 0.0
+            one_sided_p = 1.0
+        else:
+            try:
+                w_stat, one_sided_p = stats.wilcoxon(
+                    diffs,
+                    alternative='greater',
+                    zero_method='wilcox',
+                    mode='exact',
+                )
+            except TypeError:
+                # Compatibility fallback for SciPy versions without mode argument
+                w_stat, one_sided_p = stats.wilcoxon(
+                    diffs,
+                    alternative='greater',
+                    zero_method='wilcox',
+                )
         
-        # For one-sided test (we expect degradation), divide p-value by 2
-        # and check if t_stat is negative (target < source)
-        one_sided_p = p_value / 2 if t_stat < 0 else 1 - p_value / 2
-        
-        significant = one_sided_p < ALPHA and t_stat < 0
+        significant = one_sided_p < ALPHA
         
         print(f"\n{'-'*40}")
         print(f"Model: {model_name.upper()}")
         print(f"  Source F1: {source_f1:.4f}")
         print(f"  Mean Target F1: {mean_target_f1:.4f}")
         print(f"  Degradation: {degradation:+.4f}")
-        print(f"  t-statistic: {t_stat:.4f}")
+        print(f"  Wilcoxon statistic: {w_stat:.4f}")
         print(f"  p-value (one-sided): {one_sided_p:.4f}")
         print(f"  Result: {'REJECT H01 (significant degradation)' if significant else 'FAIL TO REJECT H01'}")
         
@@ -201,7 +215,7 @@ def statistical_hypothesis_test(results_df):
             'source_f1': source_f1,
             'mean_target_f1': mean_target_f1,
             'degradation': degradation,
-            't_statistic': t_stat,
+            'wilcoxon_statistic': w_stat,
             'p_value': one_sided_p,
             'significant': significant,
             'conclusion': 'Significant degradation' if significant else 'No significant degradation',

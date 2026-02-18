@@ -12,6 +12,7 @@ from typing import Dict, List, Tuple, Optional, Callable
 from pathlib import Path
 from tqdm import tqdm
 import time
+import copy
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -77,10 +78,31 @@ class EarlyStopping:
         return False
 
 
+def weighted_bce_loss(
+    outputs: torch.Tensor,
+    targets: torch.Tensor,
+    class_weights: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """
+    Binary cross entropy with optional class weights.
+
+    class_weights format: tensor([w_class0, w_class1]).
+    """
+    eps = 1e-7
+    outputs = torch.clamp(outputs, eps, 1 - eps)
+
+    if class_weights is None:
+        return nn.functional.binary_cross_entropy(outputs, targets)
+
+    w0, w1 = class_weights[0], class_weights[1]
+    loss = -(w1 * targets * torch.log(outputs) + w0 * (1 - targets) * torch.log(1 - outputs))
+    return loss.mean()
+
+
 def train_epoch(
     model: nn.Module,
     train_loader: DataLoader,
-    criterion: nn.Module,
+    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
     optimizer: optim.Optimizer,
     device: torch.device,
 ) -> Tuple[float, float]:
@@ -121,7 +143,7 @@ def train_epoch(
 def validate(
     model: nn.Module,
     val_loader: DataLoader,
-    criterion: nn.Module,
+    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
     device: torch.device,
 ) -> Tuple[float, float, Dict[str, float]]:
     """
@@ -206,11 +228,8 @@ def train_model(
     
     # Loss function with class weights
     if class_weights is not None:
-        # For binary classification, use pos_weight for BCEWithLogitsLoss
-        pos_weight = class_weights[1] / class_weights[0]
-        criterion = nn.BCELoss()  # We use BCELoss since model outputs sigmoid
-    else:
-        criterion = nn.BCELoss()
+        class_weights = class_weights.to(device)
+    criterion = lambda outputs, targets: weighted_bce_loss(outputs, targets, class_weights)
     
     # Optimizer
     optimizer = optim.Adam(
@@ -265,7 +284,7 @@ def train_model(
         # Save best model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            best_model_state = model.state_dict().copy()
+            best_model_state = copy.deepcopy(model.state_dict())
         
         if verbose and (epoch + 1) % 5 == 0:
             print(f"Epoch {epoch+1}/{epochs} | "
@@ -301,7 +320,7 @@ def evaluate_model(
     Returns:
         Dictionary of evaluation metrics
     """
-    criterion = nn.BCELoss()
+    criterion = lambda outputs, targets: weighted_bce_loss(outputs, targets, None)
     _, _, metrics = validate(model, test_loader, criterion, device)
     return metrics
 
